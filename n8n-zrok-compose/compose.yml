@@ -1,0 +1,84 @@
+services:
+  # --- ZROK SERVICES ---
+
+  zrok-init:
+    image: busybox
+    command: chown -Rc 2171:2171 /mnt/
+    user: root
+    volumes:
+      - zrok_env:/mnt
+
+  zrok-enable:
+    image: ${ZROK_CONTAINER_IMAGE:-docker.io/openziti/zrok}
+    depends_on:
+      zrok-init:
+        condition: service_completed_successfully
+    entrypoint: zrok-enable.bash
+    volumes:
+      - zrok_env:/mnt
+    environment:
+      HOME: /mnt
+      ZROK_ENABLE_TOKEN: 7IAzIsPXvOUP
+      ZROK_API_ENDPOINT: "https://api.zrok.io"
+      ZROK_ENVIRONMENT_NAME: "n8n-environment"
+
+  zrok-share:
+    image: ${ZROK_CONTAINER_IMAGE:-docker.io/openziti/zrok}
+    restart: unless-stopped
+    entrypoint: zrok-share.bash
+    depends_on:
+      zrok-enable:
+        condition: service_completed_successfully
+      # Make sure zrok waits for n8n to be available (optional but good practice)
+      n8n:
+        condition: service_started
+    volumes:
+      - zrok_env:/mnt
+    environment:
+      # internal configuration
+      HOME: /mnt # zrok homedir in container
+
+      # most relevant options
+      ZROK_UNIQUE_NAME: "perhubn8n"
+      ZROK_BACKEND_MODE: "proxy"
+      
+      # ====================================================================
+      # ⬇️  THIS IS THE FIX ⬇️
+      # Point to the n8n service name and its *container* port.
+      # Docker's internal DNS will handle the rest.
+      ZROK_TARGET: "http://n8n:5678" 
+      # ====================================================================
+
+  # --- N8N SERVICE ---
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      # This port is now just for your *local* testing (localhost:5678)
+      # zrok does NOT use this. It talks to n8n directly on the internal network.
+      - "5678:5678"
+    environment:
+      # --- Timezone Settings ---
+      - GENERIC_TIMEZONE=Asia/Kolkata
+      - TZ=Asia/Kolkata
+
+      # --- Original Settings ---
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+
+      # --- Your New Variables ---
+      # This is correct. n8n needs to know its public-facing URL.
+      - WEBHOOK_URL=https://perhubn8n.share.zrok.io/
+      - N8N_SECURE_COOKIE=false # Correct for being behind a proxy
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+# --- VOLUMES ---
+# Define all volumes used by the services
+
+volumes:
+  n8n_data: {}
+  zrok_env: {}
